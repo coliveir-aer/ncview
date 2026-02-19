@@ -512,6 +512,57 @@
             );
         }
 
+        function VolumeControls({ colorMap, onSetColorMap, isColorbarVisible, onToggleColorbar, colorbarPosition, onSetColorbarPosition }) {
+            const [pos, setPos] = useState({ x: 20, y: 20 });
+            const [dragging, setDragging] = useState(false);
+            const offset = useRef({ x:0, y:0 });
+
+            const startDrag = (e) => {
+                if (['INPUT', 'SELECT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                e.stopPropagation();
+                setDragging(true);
+                offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+            };
+
+            useEffect(() => {
+                const move = (e) => {
+                    if (!dragging) return;
+                    setPos({ x: Math.max(0, e.clientX - offset.current.x), y: Math.max(0, e.clientY - offset.current.y) });
+                };
+                const stop = () => setDragging(false);
+                document.addEventListener('mousemove', move);
+                document.addEventListener('mouseup', stop);
+                return () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', stop); };
+            }, [dragging]);
+
+            const blockStyle = { marginTop:'5px', paddingTop:'5px', borderTop:'1px solid #555', width:'100%', display:'flex', flexDirection:'column', gap:'5px' };
+            const headerStyle = { fontSize:'11px', fontWeight:'bold', color:'#fff', textAlign:'center', width:'100%', padding:'2px 0', textTransform:'uppercase' };
+            const posButton = { background: '#f8f9fa', border: '1px solid #dee2e6', color: '#212529', padding: '4px', fontSize: '10px', cursor: 'pointer', borderRadius: '3px' };
+            const posButtonActive = { background: '#007bff', color: 'white', borderColor: '#0056b3' };
+            const positions = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+            const labels = {'top-left': 'TL', 'top-right': 'TR', 'bottom-left': 'BL', 'bottom-right': 'BR'};
+
+            return (
+                <div style={{ position:'absolute', left:`${pos.x}px`, top:`${pos.y}px`, display:'flex', flexDirection:'column', alignItems:'center', background:'rgba(0,0,0,0.65)', padding:'5px', borderRadius:'5px', color:'white', zIndex:100, width:'130px', cursor:'move', userSelect:'none' }} onMouseDown={startDrag}>
+                    <div style={{...blockStyle, marginTop: 0, borderTop: 'none'}}>
+                        <div style={headerStyle}>Colorbar</div>
+                        <select style={{width:'100%', padding:'4px 2px', borderRadius:'3px', cursor:'pointer'}} value={colorMap} onChange={e=>onSetColorMap(e.target.value)}>
+                            {Object.keys(colorMaps).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <button style={{width:'100%', padding:'5px', cursor:'pointer', fontWeight:'bold', borderRadius:'3px', background:'#e9ecef', border:'1px solid #ced4da', color:'#495057'}} onClick={onToggleColorbar}>{isColorbarVisible ? 'Hide Bar' : 'Show Bar'}</button>
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:'11px', width: '100%', marginTop: '3px'}}>
+                            <label>Position:</label>
+                            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'3px'}}>
+                                {positions.map(p => (
+                                    <button key={p} style={{...posButton, ...(colorbarPosition === p ? posButtonActive : {})}} onClick={() => onSetColorbarPosition(p)}>{labels[p]}</button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         function DataView1D({ layer, onRemove, onReorder, index, totalLayers }) {
             const chartRef = useRef(null);
             const chartInstance = useRef(null);
@@ -526,7 +577,7 @@
 
                 // Sample data to prevent browser freezing if the array is massive
                 const MAX_POINTS = 5000;
-                let data = layer.values;
+                let data = Array.from(layer.values);
                 let labels = Array.from({length: data.length}, (_, i) => i);
 
                 if (data.length > MAX_POINTS) {
@@ -545,7 +596,8 @@
                             borderColor: '#007bff',
                             borderWidth: 1.5,
                             pointRadius: 0,
-                            fill: false
+                            fill: false,
+                            spanGaps: true
                         }]
                     },
                     options: {
@@ -577,14 +629,16 @@
                             </div>
                         )}
                     </div>
-                    <div className="view-canvas-wrapper" style={{ padding: '15px', backgroundColor: 'white' }}>
-                        <canvas ref={chartRef}></canvas>
+                    <div className="view-canvas-wrapper" style={{ padding: '15px', backgroundColor: 'white', position: 'relative' }}>
+                        <div style={{ position: 'absolute', inset: '15px' }}>
+                            <canvas ref={chartRef}></canvas>
+                        </div>
                     </div>
                 </div>
             );
         }
 
-        function DataView3D({ layer, colormapName, onRemove, onReorder, index, totalLayers }) {
+        function DataView3D({ layer, colormapName, onSetColorMap, onRemove, onReorder, index, totalLayers }) {
             const containerRef = useRef(null);
             const rendererRef = useRef(null);
             const sceneRef = useRef(null);
@@ -612,6 +666,9 @@
             });
 
             const [currentSlice, setCurrentSlice] = useState(0);
+            const [isCbVisible, setIsCbVisible] = useState(true);
+            const [cbPos, setCbPos] = useState('bottom-right');
+            const [domain, setDomain] = useState({ min:0, max:1 });
 
             const width = dims[axisMap.x];
             const height = dims[axisMap.y];
@@ -680,7 +737,8 @@
                 if (!meshRef.current || !layer.values) return;
                 
                 const cm = colorMaps[colormapName] || colorMaps.viridis;
-                const domain = layer.domain || getDomain(layer.values);
+                const currentDomain = layer.domain || getDomain(layer.values);
+                setDomain(currentDomain);
                 
                 const imgData = new Uint8Array(width * height * 4);
                 const xStride = strides[axisMap.x];
@@ -693,7 +751,7 @@
                         const srcIdx = (x * xStride) + (y * yStride) + (currentSlice * zStride);
                         const destIdx = y * width + x;
                         const val = vals[srcIdx];
-                        const rgba = cm(val, domain.min, domain.max);
+                        const rgba = cm(val, currentDomain.min, currentDomain.max);
                         
                         imgData[destIdx * 4] = rgba[0];
                         imgData[destIdx * 4 + 1] = rgba[1];
@@ -760,7 +818,13 @@
                             />
                         </div>
                     </div>
-                    <div className="view-canvas-wrapper" ref={containerRef} style={{ overflow: 'hidden' }}>
+                    <div className="view-canvas-wrapper" ref={containerRef} style={{ overflow: 'hidden', position: 'relative' }}>
+                        <VolumeControls 
+                            colorMap={colormapName} onSetColorMap={onSetColorMap}
+                            isColorbarVisible={isCbVisible} onToggleColorbar={() => setIsCbVisible(v => !v)}
+                            colorbarPosition={cbPos} onSetColorbarPosition={setCbPos}
+                        />
+                        {isCbVisible && <Colorbar units={layer.units === '1' ? layer.name : (layer.units || 'N/A')} colormapName={colormapName} min={domain.min} max={domain.max} position={cbPos} />}
                     </div>
                 </div>
             );
@@ -1348,7 +1412,7 @@
                                         setLayers(copy);
                                     }} />;
                                 } else if (is3DPlus) {
-                                    return <DataView3D key={`${l.name}-${i}`} layer={l} colormapName={colorMap} index={i} totalLayers={layers.length} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
+                                    return <DataView3D key={`${l.name}-${i}`} layer={l} colormapName={colorMap} onSetColorMap={setColorMap} index={i} totalLayers={layers.length} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
                                         const idx = layers.findIndex(x => x.name === n);
                                         const next = d === 'left' ? idx - 1 : idx + 1;
                                         const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
