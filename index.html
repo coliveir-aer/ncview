@@ -61,6 +61,35 @@
 
         const { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } = React;
 
+        // --- LOGGER ---
+        const LOG_LEVEL = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+        const CURRENT_LOG_LEVEL = LOG_LEVEL.DEBUG;
+        const log = (level, context, ...args) => {
+            if (level < CURRENT_LOG_LEVEL) return;
+            const time = new Date().toLocaleTimeString();
+            const prefix = `%c[${time}] [${context}]`;
+            let style = 'color: white; border-radius: 3px; padding: 2px 4px;';
+            switch (level) {
+                case LOG_LEVEL.DEBUG: style += 'background-color: #6c757d;'; console.debug(prefix, style, ...args); break;
+                case LOG_LEVEL.INFO: style += 'background-color: #007bff;'; console.info(prefix, style, ...args); break;
+                case LOG_LEVEL.WARN: style += 'background-color: #ffc107; color: black;'; console.warn(prefix, style, ...args); break;
+                case LOG_LEVEL.ERROR: style += 'background-color: #dc3545;'; console.error(prefix, style, ...args); break;
+                default: console.log(prefix, style, ...args);
+            }
+        };
+        const createLogger = (context) => ({
+            debug: (...args) => log(LOG_LEVEL.DEBUG, context, ...args),
+            info: (...args) => log(LOG_LEVEL.INFO, context, ...args),
+            warn: (...args) => log(LOG_LEVEL.WARN, context, ...args),
+            error: (...args) => log(LOG_LEVEL.ERROR, context, ...args),
+        });
+
+        const appLogger = createLogger('App');
+        const uploaderLogger = createLogger('Uploader');
+        const mainLogger = createLogger('Portable');
+
+        mainLogger.info("Starting execution. (Optimized React Active)");
+
         // --- GEOSPATIAL LOGIC (RAW WORKER STRING) ---
         const workerCode = `
             importScripts('https://unpkg.com/comlink/dist/umd/comlink.js');
@@ -298,13 +327,20 @@
         function Uploader({ onNcFileLoaded, onConfigLoaded }) {
             const handleFile = (file) => {
                 if (!file) return;
+                uploaderLogger.info(`handleFile triggered for: ${file.name}`);
                 const ext = file.name.split('.').pop().toLowerCase();
                 const reader = new FileReader();
+                reader.onerror = (e) => {
+                    uploaderLogger.error('FileReader error:', e);
+                };
                 if (ext === 'json') {
                     reader.onload = (e) => onConfigLoaded(JSON.parse(e.target.result));
                     reader.readAsText(file);
                 } else {
-                    reader.onload = (e) => onNcFileLoaded(e.target.result, file.name);
+                    reader.onload = (e) => {
+                        uploaderLogger.info('File read successfully. Calling onNcFileLoaded.');
+                        onNcFileLoaded(e.target.result, file.name);
+                    };
                     reader.readAsArrayBuffer(file);
                 }
             };
@@ -646,18 +682,137 @@
                 setTransform(t => ({ ...t, scale: Math.max(0.1, t.scale * factor) }));
             };
 
-            const handleExport = (scale) => {
-                const [h, w] = layer.dims;
-                const ew = Math.floor(w * scale), eh = Math.floor(h * scale);
-                const out = document.createElement('canvas'); out.width=ew; out.height=eh;
-                const ctx = out.getContext('2d');
-                ctx.imageSmoothingEnabled = false;
-                ctx.drawImage(offscreenCanvasRef.current, 0, 0, ew, eh);
+            const handleExport = useCallback((scaleFactor) => {
+                if (!layer) return;
+
+                const [fullHeight, fullWidth] = layer.dims;
+                const exportWidth = Math.floor(fullWidth * scaleFactor);
+                const exportHeight = Math.floor(fullHeight * scaleFactor);
+
+                const mainExportCanvas = document.createElement('canvas');
+                mainExportCanvas.width = exportWidth;
+                mainExportCanvas.height = exportHeight;
+                const ctx = mainExportCanvas.getContext('2d');
+                
+                ctx.imageSmoothingEnabled = false; 
+                ctx.drawImage(offscreenCanvasRef.current, 0, 0, exportWidth, exportHeight);
+                
+                if (overlaySettings.visible && spatialIndex) {
+                    ctx.save();
+                    ctx.scale(scaleFactor, scaleFactor);
+                    
+                    const drawFeats = (feats, isBoundary) => {
+                        if(!feats) return;
+                        const { minLat, maxLat, minLon, maxLon } = spatialIndex.domain;
+                        
+                        const currentScale = transform.scale || 1;
+                        const exportLineWidth = overlaySettings.width / currentScale;
+                        
+                        if (isBoundary) {
+                            ctx.lineWidth = exportLineWidth / 2;
+                            ctx.strokeStyle = `${overlaySettings.color}99`;
+                        } else {
+                            ctx.lineWidth = exportLineWidth;
+                            ctx.strokeStyle = overlaySettings.color;
+                        }
+                        
+                        ctx.beginPath();
+                        for (let fIdx = 0; fIdx < feats.length; fIdx++) {
+                            const f = feats[fIdx];
+                            if (!f || !f.geometry || !f.geometry.type) continue; 
+                            const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+                            if (!polys) continue;
+                            
+                            for (let pIdx = 0; pIdx < polys.length; pIdx++) {
+                                const p = polys[pIdx];
+                                if (!p) continue;
+                                for (let rIdx = 0; rIdx < p.length; rIdx++) {
+                                    const ring = p[rIdx];
+                                    if (!ring) continue;
+                                    let first = true;
+                                    for (let ptIdx = 0; ptIdx < ring.length; ptIdx++) {
+                                        const pt = ring[ptIdx];
+                                        // Fast rejection padded by 2 degrees
+                                        if (pt[1] < minLat - 2 || pt[1] > maxLat + 2 || pt[0] < minLon - 2 || pt[0] > maxLon + 2) {
+                                            first = true;
+                                            continue;
+                                        }
+                                        const px = findClosestPixel(pt[1], pt[0], spatialIndex);
+                                        if (px) { 
+                                            if(first) { ctx.moveTo(px.x, px.y); first=false; } 
+                                            else ctx.lineTo(px.x, px.y); 
+                                        } else {
+                                            first = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ctx.stroke();
+                    };
+
+                    drawFeats(coastlineData, false);
+                    drawFeats(boundaryData, true);
+                    
+                    ctx.restore();
+                }
+
+                if (isCbVisible) {
+                    const colorbarScaleRefWidth = 1200;
+                    const colorbarScale = Math.max(0.5, exportWidth / colorbarScaleRefWidth);
+                    const colorbarTotalWidth = 220 * colorbarScale;
+                    const colorbarTotalHeight = 60 * colorbarScale;
+                    const padding = 10 * colorbarScale;
+                    const fontSize = 12 * colorbarScale;
+                    
+                    let cbX = padding;
+                    let cbY = padding;
+                    if (cbPos.includes('bottom')) {
+                        cbY = exportHeight - colorbarTotalHeight - padding;
+                    }
+                    if (cbPos.includes('right')) {
+                        cbX = exportWidth - colorbarTotalWidth - padding;
+                    }
+                    
+                    const cbGradientWidth = colorbarTotalWidth - (padding * 2);
+                    const cbGradientHeight = 20 * colorbarScale;
+
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                    ctx.fillRect(cbX, cbY, colorbarTotalWidth, colorbarTotalHeight);
+                    
+                    const gradient = ctx.createLinearGradient(cbX + padding, 0, cbX + padding + cbGradientWidth, 0);
+                    const colorizer = colorMaps[colormapName] || colorMaps.viridis;
+                    if (domain.min !== Infinity) {
+                        for (let i = 0; i <= 1; i += 0.01) {
+                            const value = (domain.min === domain.max) ? domain.min : domain.min + (domain.max - domain.min) * i;
+                            const rgba = colorizer(value, domain.min, domain.max);
+                            if (!rgba.some(isNaN)) {
+                                gradient.addColorStop(i, `rgba(${rgba[0]},${rgba[1]},${rgba[2]},${rgba[3] / 255})`);
+                            }
+                        }
+                    }
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(cbX + padding, cbY + padding + (15 * colorbarScale), cbGradientWidth, cbGradientHeight);
+                    
+                    const colorbarTitleText = (layer.units === '1') ? layer.name : (layer.units || 'N/A');
+                    ctx.fillStyle = 'white';
+                    ctx.font = `${fontSize}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(colorbarTitleText, cbX + colorbarTotalWidth / 2, cbY + padding + (12 * colorbarScale));
+                    
+                    ctx.textAlign = 'left';
+                    ctx.fillText(domain.min.toFixed(2), cbX + padding, cbY + padding + cbGradientHeight + (25 * colorbarScale));
+                    
+                    ctx.textAlign = 'right';
+                    ctx.fillText(domain.max.toFixed(2), cbX + padding + cbGradientWidth, cbY + padding + cbGradientHeight + (25 * colorbarScale));
+                }
+
+                const filename = `${(layer.title || layer.name).replace(/[^a-z0-9]/gi, '_').toUpperCase()}_${exportWidth}X${exportHeight}.png`;
                 const link = document.createElement('a');
-                link.download = `${layer.name}_export.png`;
-                link.href = out.toDataURL();
+                link.download = filename;
+                link.href = mainExportCanvas.toDataURL('image/png');
                 link.click();
-            };
+            }, [layer, colormapName, domain, coastlineData, boundaryData, spatialIndex, overlaySettings, transform, isCbVisible, cbPos]);
 
             const cbTitle = layer.units === '1' ? layer.name : (layer.units || 'N/A');
 
@@ -701,7 +856,9 @@
             const [special, setSpecial] = useState({ lat:false, lon:false, map:false });
 
             useEffect(() => {
+                appLogger.info("Initializing engine and assets...");
                 h5wasm.ready.then(() => {
+                    appLogger.info("h5wasm Ready.");
                     setReady(true);
                     const params = new URLSearchParams(window.location.search);
                     const fileUrl = params.get('fileUrl');
@@ -721,8 +878,9 @@
                         const countries = topojson.feature(world, world.objects.countries).features;
                         const states = topojson.feature(us, us.objects.states).features;
                         setBoundaries([...countries, ...states]);
+                        appLogger.info("Map Atlas loaded successfully.");
                     } catch (err) {
-                        console.error("[App] Map Atlas Load Error:", err);
+                        appLogger.error("Map Atlas Load Error:", err);
                     }
                 };
                 loadMaps();
@@ -731,8 +889,9 @@
             const fetchFileUrl = async (url, explicitName = null, initialVar = null) => {
                 const fileName = explicitName || url.split('/').pop() || 'download.nc';
                 setLoadingMessage(`Downloading: ${fileName}`);
-                setIsLoading(true);
+                setLoading(true);
                 setDownloadProgress(0);
+                appLogger.info(`Starting download from URL: ${url}`);
                 try {
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -755,24 +914,29 @@
                     for(let chunk of chunks) { chunksAll.set(chunk, position); position += chunk.length; }
                     
                     setDownloadProgress(0);
+                    appLogger.info(`Download complete, initiating upload flow for ${fileName}`);
                     await handleUpload(chunksAll.buffer, fileName, initialVar);
                 } catch (error) {
+                    appLogger.error(`Failed to load URL:`, error);
                     notifier.error(`Failed to load URL: ${error.message}`);
-                    setIsLoading(false);
+                    setLoading(false);
                 }
             };
 
             const handleConfigLoaded = (config) => {
+                appLogger.info("Config loaded", config);
                 if (config.url) {
                     fetchFileUrl(config.url, config.layerName, config.primaryVariable);
                 }
             };
 
             const handleUpload = async (buf, name, initialVar = null) => {
+                appLogger.info(`Upload triggered for: ${name}`);
                 setLoadingMessage(`Processing Metadata for ${name}...`);
                 setLoading(true);
                 try {
                     const id = `f${Date.now()}`;
+                    appLogger.info(`Writing file to FS: ${id}`);
                     h5wasm.FS.writeFile(id, new Uint8Array(buf));
                     const f = new h5wasm.File(id, 'r');
                     const root = f.get('/');
@@ -795,13 +959,16 @@
                         }
                     };
                     scan(root);
+                    appLogger.info(`Scanned ${vars.length} variables.`);
                     
                     const globalAttrs = extractAttributes(root);
                     const meta = { variables: vars, globalAttributes: globalAttrs, fileBuffer: buf, isGeospatial: false };
                     
+                    appLogger.info("Checking for geospatial projection...");
                     const proj = findVar(h5wasm, root, 'goes_imager_projection');
                     if (proj) {
                         setLoadingMessage('Computing Geospatial Coordinates...');
+                        appLogger.info("Found GOES projection. Computing coordinates...");
                         const x = findVar(h5wasm, root, 'x');
                         const y = findVar(h5wasm, root, 'y');
                         if (x && y) {
@@ -810,6 +977,7 @@
                             meta.coords = coords;
                             meta.isGeospatial = true;
                             meta.latLonDomain = { lat: getDomain(coords.lats), lon: getDomain(coords.lons) };
+                            appLogger.info("Geo computation complete.");
                         }
                     }
                     
@@ -821,6 +989,7 @@
                         addLayer(meta, name, initialVar || vars[0].name);
                     }
                 } catch (e) { 
+                    appLogger.error("Upload Error:", e);
                     notifier.error(e.message); 
                 }
                 setLoading(false);
@@ -828,6 +997,7 @@
 
             const addLayer = async (sourceMeta, srcName, varName) => {
                 if (layers.some(l => l.name === varName)) return;
+                appLogger.info(`Adding layer: ${varName} from source: ${srcName}`);
                 setLoadingMessage(`Loading Layer: ${varName}...`);
                 setLoading(true);
                 const id = `v${Date.now()}`;
@@ -846,6 +1016,7 @@
                     setLayers(prev => [...prev, layer]);
                     f.close(); h5wasm.FS.unlink(id);
                 } catch(e) {
+                    appLogger.error("Add Layer Error:", e);
                     notifier.error(e.message);
                 }
                 setLoading(false);
