@@ -1307,8 +1307,8 @@
                     f.close(); h5wasm.FS.unlink(id);
                     notifier.success(`Loaded ${name}`);
                     
-                    if (initialVar || vars.length > 0) {
-                        addLayer(meta, name, initialVar || vars[0].name);
+                    if (initialVar) {
+                        addLayer(meta, name, initialVar);
                     }
                 } catch (e) { 
                     appLogger.error("Upload Error:", e);
