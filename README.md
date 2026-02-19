@@ -1,4 +1,3 @@
-empty
 # NetCDF Raster Sandbox (ncview)
 
 A fully browser-based tool for visualizing, analyzing, and exploring multidimensional NetCDF (`.nc`) datasets.
