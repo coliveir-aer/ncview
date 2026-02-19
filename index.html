@@ -9,6 +9,10 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
+    <!-- New Dependencies for 1D and 3D Rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
     <style>
         html, body, #root { height: 100%; margin: 0; padding: 0; overflow: hidden; }
         body { 
@@ -508,6 +512,260 @@
             );
         }
 
+        function DataView1D({ layer, onRemove, onReorder, index, totalLayers }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (!chartRef.current || !layer || !layer.values) return;
+                const ctx = chartRef.current.getContext('2d');
+
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                // Sample data to prevent browser freezing if the array is massive
+                const MAX_POINTS = 5000;
+                let data = layer.values;
+                let labels = Array.from({length: data.length}, (_, i) => i);
+
+                if (data.length > MAX_POINTS) {
+                    const step = Math.ceil(data.length / MAX_POINTS);
+                    data = data.filter((_, i) => i % step === 0);
+                    labels = labels.filter((_, i) => i % step === 0);
+                }
+
+                chartInstance.current = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: layer.title,
+                            data: data,
+                            borderColor: '#007bff',
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            fill: false
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        parsing: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { title: { display: true, text: 'Index' } },
+                            y: { title: { display: true, text: layer.units || 'Value' } }
+                        }
+                    }
+                });
+
+                return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+            }, [layer]);
+
+            return (
+                <div className="view-container">
+                    <div className="view-header">
+                        <span className="view-header-title" title={layer.title || layer.name}>{layer.title || layer.name} (1D Sequence)</span>
+                        {onRemove && onReorder && (
+                            <div className="view-header-buttons">
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'left')} disabled={index===0} title="Move Left">&larr;</button>
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'right')} disabled={index===totalLayers-1} title="Move Right">&rarr;</button>
+                                <button className="view-btn view-btn-close" onClick={() => onRemove(layer.name)} title="Close View">&times;</button>
+                            </div>
+                        )}
+                    </div>
+                    <div className="view-canvas-wrapper" style={{ padding: '15px', backgroundColor: 'white' }}>
+                        <canvas ref={chartRef}></canvas>
+                    </div>
+                </div>
+            );
+        }
+
+        function DataView3D({ layer, colormapName, onRemove, onReorder, index, totalLayers }) {
+            const containerRef = useRef(null);
+            const rendererRef = useRef(null);
+            const sceneRef = useRef(null);
+            const cameraRef = useRef(null);
+            const meshRef = useRef(null);
+            
+            const dims = layer.dims;
+            const n = dims.length;
+
+            // Calculate memory strides to support arbitrary axis mapping
+            const strides = useMemo(() => {
+                const s = new Array(n);
+                let currentStride = 1;
+                for (let i = n - 1; i >= 0; i--) {
+                    s[i] = currentStride;
+                    currentStride *= dims[i];
+                }
+                return s;
+            }, [dims, n]);
+
+            const [axisMap, setAxisMap] = useState({
+                x: n - 1,
+                y: Math.max(0, n - 2),
+                z: Math.max(0, n - 3)
+            });
+
+            const [currentSlice, setCurrentSlice] = useState(0);
+
+            const width = dims[axisMap.x];
+            const height = dims[axisMap.y];
+            const totalSlices = dims[axisMap.z];
+
+            // Three.js basic setup
+            useEffect(() => {
+                if (!containerRef.current) return;
+                const container = containerRef.current;
+                
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x222222);
+                sceneRef.current = scene;
+
+                const aspect = width / height;
+
+                const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+                // Adjust camera Z based on aspect ratio to keep plane in view
+                camera.position.z = Math.max(1.5, 1.5 / aspect);
+                cameraRef.current = camera;
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(container.clientWidth, container.clientHeight);
+                container.appendChild(renderer.domElement);
+                rendererRef.current = renderer;
+
+                const geometry = new THREE.PlaneGeometry(2 * Math.min(1, aspect), 2 * Math.min(1, 1/aspect));
+                const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+                const mesh = new THREE.Mesh(geometry, material);
+                scene.add(mesh);
+                meshRef.current = mesh;
+
+                const animate = () => {
+                    requestAnimationFrame(animate);
+                    if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                        rendererRef.current.render(sceneRef.current, cameraRef.current);
+                    }
+                };
+                animate();
+
+                const handleResize = () => {
+                    if (!containerRef.current || !cameraRef.current || !rendererRef.current) return;
+                    const w = containerRef.current.clientWidth;
+                    const h = containerRef.current.clientHeight;
+                    cameraRef.current.aspect = w / h;
+                    cameraRef.current.updateProjectionMatrix();
+                    rendererRef.current.setSize(w, h);
+                };
+                
+                const obs = new ResizeObserver(() => handleResize());
+                obs.observe(container);
+
+                return () => {
+                    obs.disconnect();
+                    if (containerRef.current && rendererRef.current) {
+                        containerRef.current.removeChild(rendererRef.current.domElement);
+                    }
+                    if (rendererRef.current) rendererRef.current.dispose();
+                    if (geometry) geometry.dispose();
+                    if (material) material.dispose();
+                };
+            }, [width, height]);
+
+            // Update Texture based on slice slider and axis mapping
+            useEffect(() => {
+                if (!meshRef.current || !layer.values) return;
+                
+                const cm = colorMaps[colormapName] || colorMaps.viridis;
+                const domain = layer.domain || getDomain(layer.values);
+                
+                const imgData = new Uint8Array(width * height * 4);
+                const xStride = strides[axisMap.x];
+                const yStride = strides[axisMap.y];
+                const zStride = strides[axisMap.z];
+                const vals = layer.values;
+
+                for (let y = 0; y < height; y++) {
+                    for (let x = 0; x < width; x++) {
+                        const srcIdx = (x * xStride) + (y * yStride) + (currentSlice * zStride);
+                        const destIdx = y * width + x;
+                        const val = vals[srcIdx];
+                        const rgba = cm(val, domain.min, domain.max);
+                        
+                        imgData[destIdx * 4] = rgba[0];
+                        imgData[destIdx * 4 + 1] = rgba[1];
+                        imgData[destIdx * 4 + 2] = rgba[2];
+                        imgData[destIdx * 4 + 3] = rgba[3];
+                    }
+                }
+
+                const texture = new THREE.DataTexture(imgData, width, height, THREE.RGBAFormat);
+                texture.needsUpdate = true;
+                
+                if (meshRef.current.material.map) {
+                    meshRef.current.material.map.dispose();
+                }
+                meshRef.current.material.map = texture;
+                meshRef.current.material.needsUpdate = true;
+
+            }, [layer, currentSlice, colormapName, width, height, axisMap, strides]);
+
+            const handleAxisChange = (axis, value) => {
+                setAxisMap(prev => ({ ...prev, [axis]: parseInt(value) }));
+                setCurrentSlice(0);
+            };
+
+            return (
+                <div className="view-container">
+                    <div className="view-header">
+                        <span className="view-header-title" title={layer.title || layer.name}>{layer.title || layer.name} (3D Volume Slice)</span>
+                        {onRemove && onReorder && (
+                            <div className="view-header-buttons">
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'left')} disabled={index===0} title="Move Left">&larr;</button>
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'right')} disabled={index===totalLayers-1} title="Move Right">&rarr;</button>
+                                <button className="view-btn view-btn-close" onClick={() => onRemove(layer.name)} title="Close View">&times;</button>
+                            </div>
+                        )}
+                    </div>
+                    <div style={{ padding: '8px', background: '#343a40', color: 'white', display: 'flex', flexDirection: 'column', gap: '5px', borderTop: '1px solid #555' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px', fontSize: '11px', flexWrap: 'wrap' }}>
+                            <label>X-Axis: 
+                                <select value={axisMap.x} onChange={e => handleAxisChange('x', e.target.value)} style={{marginLeft: '4px', padding: '1px'}}>
+                                    {dims.map((d, i) => <option key={i} value={i}>Dim {i} (len: {d})</option>)}
+                                </select>
+                            </label>
+                            <label>Y-Axis: 
+                                <select value={axisMap.y} onChange={e => handleAxisChange('y', e.target.value)} style={{marginLeft: '4px', padding: '1px'}}>
+                                    {dims.map((d, i) => <option key={i} value={i}>Dim {i} (len: {d})</option>)}
+                                </select>
+                            </label>
+                            <label>Slice (Z): 
+                                <select value={axisMap.z} onChange={e => handleAxisChange('z', e.target.value)} style={{marginLeft: '4px', padding: '1px'}}>
+                                    {dims.map((d, i) => <option key={i} value={i}>Dim {i} (len: {d})</option>)}
+                                </select>
+                            </label>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ fontSize: '11px', marginRight: '10px', minWidth: '90px' }}>Slice Z: {currentSlice} / {totalSlices - 1}</span>
+                            <input 
+                                type="range" 
+                                min="0" 
+                                max={Math.max(0, totalSlices - 1)} 
+                                value={currentSlice} 
+                                onChange={(e) => setCurrentSlice(parseInt(e.target.value))}
+                                style={{ flexGrow: 1, cursor: 'pointer' }}
+                            />
+                        </div>
+                    </div>
+                    <div className="view-canvas-wrapper" ref={containerRef} style={{ overflow: 'hidden' }}>
+                    </div>
+                </div>
+            );
+        }
+
         function InteractiveDataView({ layer, colormapName, onSetColorMap, coastlineData, boundaryData, toolMode, onSetToolMode, onPixelPick, onRemove, onReorder, index, totalLayers }) {
             const viewRef = useRef(null);
             const canvasRef = useRef(null);
@@ -947,7 +1205,7 @@
                         for (let k of g.keys()) {
                             const it = g.get(k);
                             if (it instanceof h5wasm.Group) scan(it);
-                            else if (it.shape && it.shape.length === 2) {
+                            else if (it.shape && it.shape.length >= 1) { // CHANGED: Allowed 1D and N-D arrays
                                 vars.push({ 
                                     name: k, 
                                     shape: it.shape, 
@@ -1007,11 +1265,13 @@
                     const v = findVar(h5wasm, f.get('/'), varName);
                     if (!v) throw new Error("Variable not found");
                     const attrs = extractAttributes(v);
+                    const values = unpack(v, true);
                     const layer = {
                         name: varName, title: `${srcName} - ${varName}`,
-                        values: unpack(v, true), dims: v.shape, units: attrs.units || 'N/A',
+                        values: values, dims: v.shape, units: attrs.units || 'N/A',
                         attributes: attrs, coords: sourceMeta.coords,
-                        tech: { dtype: v.dtype, shape: v.shape }
+                        tech: { dtype: v.dtype, shape: v.shape },
+                        domain: getDomain(values) // Cached domain to prevent unneeded heavy iteration loops
                     };
                     setLayers(prev => [...prev, layer]);
                     f.close(); h5wasm.FS.unlink(id);
@@ -1076,14 +1336,33 @@
                     
                     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, backgroundColor: '#e9ecef' }}>
                         <div className="content-grid" style={{ flexGrow: 1 }}>
-                            {layers.map((l, i) => (
-                                <InteractiveDataView key={`${l.name}-${i}`} layer={l} colormapName={colorMap} onSetColorMap={setColorMap} coastlineData={coastline} boundaryData={boundaries} toolMode={toolMode} onSetToolMode={setToolMode} onPixelPick={setPixelInfo} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
-                                    const idx = layers.findIndex(x => x.name === n);
-                                    const next = d === 'left' ? idx - 1 : idx + 1;
-                                    const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
-                                    setLayers(copy);
-                                }} index={i} totalLayers={layers.length} />
-                            ))}
+                            {layers.map((l, i) => {
+                                const is1D = l.dims.length === 1;
+                                const is3DPlus = l.dims.length >= 3;
+                                
+                                if (is1D) {
+                                    return <DataView1D key={`${l.name}-${i}`} layer={l} index={i} totalLayers={layers.length} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
+                                        const idx = layers.findIndex(x => x.name === n);
+                                        const next = d === 'left' ? idx - 1 : idx + 1;
+                                        const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
+                                        setLayers(copy);
+                                    }} />;
+                                } else if (is3DPlus) {
+                                    return <DataView3D key={`${l.name}-${i}`} layer={l} colormapName={colorMap} index={i} totalLayers={layers.length} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
+                                        const idx = layers.findIndex(x => x.name === n);
+                                        const next = d === 'left' ? idx - 1 : idx + 1;
+                                        const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
+                                        setLayers(copy);
+                                    }} />;
+                                } else {
+                                    return <InteractiveDataView key={`${l.name}-${i}`} layer={l} colormapName={colorMap} onSetColorMap={setColorMap} coastlineData={coastline} boundaryData={boundaries} toolMode={toolMode} onSetToolMode={setToolMode} onPixelPick={setPixelInfo} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
+                                        const idx = layers.findIndex(x => x.name === n);
+                                        const next = d === 'left' ? idx - 1 : idx + 1;
+                                        const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
+                                        setLayers(copy);
+                                    }} index={i} totalLayers={layers.length} />;
+                                }
+                            })}
                             {special.lat && geoSource && geoSourceDims && (
                                 <InteractiveDataView layer={{ name: 'lat', title: 'Calculated Latitude', values: geoSource.coords.lats, dims: geoSourceDims, domain: geoSource.latLonDomain.lat, units: 'Degrees', coords: geoSource.coords }} colormapName={colorMap} onSetColorMap={setColorMap} coastlineData={coastline} boundaryData={boundaries} toolMode={toolMode} onSetToolMode={setToolMode} onPixelPick={setPixelInfo} onRemove={()=>setSpecial(s=>({...s, lat:false}))} onReorder={()=>null} index={0} totalLayers={1} />
                             )}
