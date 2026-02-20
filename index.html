@@ -38,6 +38,8 @@
         
         .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 3000; }
         .modal-content { background-color: white; padding: 1.5rem; border-radius: 8px; width: 600px; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+        .modal-content-large { width: 90%; max-width: 1200px; }
+        
         .metadata-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 5px; }
         .metadata-table th, .metadata-table td { padding: 8px; border: 1px solid #ddd; text-align: left; word-break: break-word; }
         .metadata-table tr:nth-child(even) { background-color: #f9f9f9; }
@@ -53,6 +55,19 @@
         
         .attribution-footer { padding: 4px; text-align: center; background: #e9ecef; border-top: 1px solid #ddd; }
         .attribution-text { background: rgba(255,255,255,0.8); padding: 5px 10px; border-radius: 3px; font-size: 10px; color: #333; box-shadow: 0 1px 3px rgba(0,0,0,0.15); display: inline-block; }
+
+        /* Dashboard specific styles */
+        .dash-grid { display: flex; overflow-x: auto; border: 1px solid #e2e8f0; background: #f8fafc; padding-bottom: 5px; }
+        .dash-col { flex: 0 0 auto; display: flex; flex-direction: column; min-width: 45px; border-right: 1px solid #e2e8f0; }
+        .dash-header { background: #334155; color: white; padding: 4px; text-align: center; font-size: 11px; font-weight: bold; }
+        .dash-slots { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; justify-content: flex-start; align-content: flex-start; min-height: 60px; }
+        .dash-slot { width: 12px; height: 12px; border-radius: 1px; cursor: pointer; transition: transform 0.1s; }
+        .dash-slot:hover { transform: scale(1.3); z-index: 10; box-shadow: 0 0 4px rgba(0,0,0,0.3); }
+        .slot-idle { background-color: #cbd5e1; }
+        .slot-scanning { background-color: #eab308; animation: pulse 1s infinite; }
+        .slot-exists { background-color: #22c55e; }
+        .slot-missing { background-color: #ef4444; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
     </style>
 </head>
 <body>
@@ -349,9 +364,291 @@
                 }
             };
             return (
-                <div style={{border:'2px dashed #ccc', padding:'1.5rem', textAlign:'center', cursor:'pointer'}} onClick={() => document.getElementById('file-input').click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault(); handleFile(e.dataTransfer.files[0])}}>
+                <div style={{border:'2px dashed #ccc', padding:'1.5rem', textAlign:'center', cursor:'pointer', backgroundColor: '#f8fafc'}} onClick={() => document.getElementById('file-input').click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault(); handleFile(e.dataTransfer.files[0])}}>
                     <input type="file" id="file-input" style={{display:'none'}} onChange={e => handleFile(e.target.files[0])} accept=".nc,.json" />
-                    <p style={{fontSize: '0.9rem'}}>Drag & drop config (.json) or data (.nc) file here, or click to select.</p>
+                    <p style={{fontSize: '0.9rem', margin: 0}}>Drag & drop data (.nc) or config (.json) file here, or click to select.</p>
+                </div>
+            );
+        }
+
+        // --- DASHBOARD MODAL COMPONENT ---
+        const GOES_PRODUCTS = [
+            { code: "ABI-L1b-Rad", name: "ABI L1b Radiance" },
+            { code: "ABI-L2-ACHA", name: "ABI L2 Cloud Top Height" },
+            { code: "ABI-L2-ACHA2KM", name: "ABI L2 2km Cloud Height" },
+            { code: "ABI-L2-ACHP2KM", name: "ABI L2 2km Cloud Pressure" },
+            { code: "ABI-L2-ACHT", name: "ABI L2 Cloud Top Temperature" },
+            { code: "ABI-L2-ACM", name: "ABI L2 Cloud Mask" },
+            { code: "ABI-L2-ACTP", name: "ABI L2 Cloud Top Phase" },
+            { code: "ABI-L2-ADP", name: "ABI L2 Aerosol Detection" },
+            { code: "ABI-L2-AICE", name: "ABI L2 Ice Conc & Extent" },
+            { code: "ABI-L2-AITA", name: "ABI L2 Ice Thickness & Age" },
+            { code: "ABI-L2-AOD", name: "ABI L2 Aerosol Optical Depth" },
+            { code: "ABI-L2-BRF", name: "ABI L2 Bidirectional Reflectance" },
+            { code: "ABI-L2-CCLC", name: "ABI L2 Clear Sky Confidence" },
+            { code: "ABI-L2-CMIP", name: "ABI L2 Cloud & Moisture Imagery" },
+            { code: "ABI-L2-COD", name: "ABI L2 Cloud Optical Depth" },
+            { code: "ABI-L2-COD2KM", name: "ABI L2 Cloud Optical Depth 2KM" },
+            { code: "ABI-L2-CPS", name: "ABI L2 Cloud Particle Size" },
+            { code: "ABI-L2-CTP", name: "ABI L2 Cloud Top Pressure" },
+            { code: "ABI-L2-DMW", name: "ABI L2 Derived Motion Winds" },
+            { code: "ABI-L2-DMWV", name: "ABI L2 Derived Motion Wind Vectors" },
+            { code: "ABI-L2-DSI", name: "ABI L2 Derived Stability Indices" },
+            { code: "ABI-L2-DSR", name: "ABI L2 Downward Shortwave Radiation" },
+            { code: "ABI-L2-FDC", name: "ABI L2 Fire/Hot Spot" },
+            { code: "ABI-L2-FSC", name: "ABI L2 Fractional Snow Cover" },
+            { code: "ABI-L2-LSA", name: "ABI L2 Land Surface Albedo" },
+            { code: "ABI-L2-LST", name: "ABI L2 Land Surface Temperature" },
+            { code: "ABI-L2-LST2KM", name: "ABI L2 Land Surface Temperature 2KM" },
+            { code: "ABI-L2-LVMP", name: "ABI L2 Legacy Vertical Moisture Profile" },
+            { code: "ABI-L2-LVTP", name: "ABI L2 Legacy Vertical Temp Profile" },
+            { code: "ABI-L2-MCMIP", name: "ABI L2 Imagery 16 Channel" },
+            { code: "ABI-L2-PAR", name: "ABI L2 Photosynthetically Active Radiation" },
+            { code: "ABI-L2-RRQPE", name: "ABI L2 Rainfall Rate QPE" },
+            { code: "ABI-L2-RSR", name: "ABI L2 Reflected Shortwave Radiation Top-of-Atmosphere" },
+            { code: "ABI-L2-SST", name: "ABI L2 Sea Surface Temperature" },
+            { code: "ABI-L2-TPW", name: "ABI L2 Total Precipitable Water" },
+            { code: "EXIS-L1b-SFEU", name: "EXIS L1b Solar Flux EUV" },
+            { code: "EXIS-L1b-SFXR", name: "EXIS L1b Solar Flux X-Ray" },
+            { code: "GLM-L2-LCFA", name: "GLM L2 Lightning" },
+            { code: "MAG-L1b-GEOF", name: "MAG L1b Geomagnetic Field" },
+            { code: "SEIS-L1b-EHIS", name: "SEIS L1b Energetic Heavy Ion Sensor" },
+            { code: "SEIS-L1b-MPSH", name: "SEIS L1b Magnetospheric Particle Sensor High" },
+            { code: "SEIS-L1b-MPSL", name: "SEIS L1b Magnetospheric Particle Sensor Low" },
+            { code: "SEIS-L1b-SGPS", name: "SEIS L1b Solar and Galactic Proton Sensor" },
+            { code: "SUVI-L1b-Fe093", name: "SUVI L1b Fe093" },
+            { code: "SUVI-L1b-Fe131", name: "SUVI L1b Fe131" },
+            { code: "SUVI-L1b-Fe171", name: "SUVI L1b Fe171" },
+            { code: "SUVI-L1b-Fe195", name: "SUVI L1b Fe195" },
+            { code: "SUVI-L1b-Fe284", name: "SUVI L1b Fe284" },
+            { code: "SUVI-L1b-He303", name: "SUVI L1b He303" }
+        ];
+
+        function GoesDashboardModal({ isOpen, onClose, onSelectFile }) {
+            const notifier = useNotifier();
+            if (!isOpen) return null;
+
+            const [satellite, setSatellite] = useState('noaa-goes18');
+            const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+            const [product, setProduct] = useState('ABI-L2-CMIP');
+            const [domain, setDomain] = useState('C');
+            const [clickAction, setClickAction] = useState('load'); // 'load', 'download', 'https', 's3'
+            
+            // Results is an array of 24 hours. Each hour is an array of slots.
+            const [results, setResults] = useState(Array(24).fill(null));
+            const [scanStatus, setScanStatus] = useState(Array(24).fill('idle'));
+
+            const domainConfig = { 'F': 6, 'C': 12, 'M1': 60, 'M2': 60 };
+            const slotsPerHour = domainConfig[domain];
+
+            const handleScan = async () => {
+                const emptyResults = Array(24).fill(null).map(() => Array(slotsPerHour).fill(null));
+                setResults(emptyResults);
+                setScanStatus(Array(24).fill('scanning'));
+
+                const dateObj = new Date(date);
+                const year = dateObj.getUTCFullYear();
+                const start = new Date(Date.UTC(year, 0, 1));
+                const doy = Math.floor((dateObj - start) / (1000 * 60 * 60 * 24)) + 1;
+                const doyPadded = String(doy).padStart(3, '0');
+
+                let productPathPrefix = product;
+                if (product.startsWith('ABI-L')) {
+                    if (domain === 'F') productPathPrefix += 'F';
+                    else if (domain === 'C') productPathPrefix += 'C';
+                    else productPathPrefix += 'M';
+                }
+
+                const scanHour = async (h) => {
+                    const hourPadded = String(h).padStart(2, '0');
+                    const fullPrefix = `${productPathPrefix}/${year}/${doyPadded}/${hourPadded}/`;
+                    const url = `https://${satellite}.s3.amazonaws.com/?list-type=2&prefix=${fullPrefix}`;
+                    
+                    try {
+                        const response = await fetch(url);
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const text = await response.text();
+                        const parser = new DOMParser();
+                        const xml = parser.parseFromString(text, "application/xml");
+                        const keys = Array.from(xml.getElementsByTagName('Key')).map(n => n.textContent);
+                        
+                        const hourSlots = Array(slotsPerHour).fill(null);
+                        keys.forEach(key => {
+                            const filename = key.split('/').pop();
+                            
+                            // Domain-specific filtering
+                            if (domain.startsWith('M')) {
+                                if (!filename.includes(`${product}-${domain}-`)) return;
+                            }
+
+                            const match = filename.match(/_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})/);
+                            if (match) {
+                                const min = parseInt(match[4], 10);
+                                let idx = -1;
+                                if (domain === 'F') idx = Math.floor(min / 10);
+                                else if (domain === 'C') idx = Math.floor(min / 5);
+                                else idx = min;
+                                
+                                if (idx >= 0 && idx < slotsPerHour) {
+                                    hourSlots[idx] = { key, filename };
+                                }
+                            }
+                        });
+                        
+                        setResults(prev => {
+                            const next = [...prev];
+                            next[h] = hourSlots;
+                            return next;
+                        });
+                        setScanStatus(prev => {
+                            const next = [...prev];
+                            next[h] = 'done';
+                            return next;
+                        });
+                    } catch (e) {
+                        setScanStatus(prev => {
+                            const next = [...prev];
+                            next[h] = 'error';
+                            return next;
+                        });
+                    }
+                };
+
+                // Run all 24 hours in parallel for maximum speed
+                await Promise.all(Array.from({length: 24}, (_, i) => scanHour(i)));
+            };
+
+            const handleSlotClick = (slot) => {
+                if (!slot) return;
+                const httpsUri = `https://${satellite}.s3.amazonaws.com/${slot.key}`;
+                const s3Uri = `s3://${satellite}/${slot.key}`;
+
+                if (clickAction === 'load') {
+                    onSelectFile(httpsUri, slot.filename);
+                } else if (clickAction === 'download') {
+                    const link = document.createElement('a');
+                    link.href = httpsUri;
+                    link.target = '_blank';
+                    link.download = slot.filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    notifier.success("File download initiated!");
+                } else if (clickAction === 'https') {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = httpsUri;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    notifier.success("HTTPS link copied to clipboard!");
+                } else if (clickAction === 's3') {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = s3Uri;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    notifier.success("S3 URI copied to clipboard!");
+                }
+            };
+
+            return (
+                <div className="modal-overlay" onClick={onClose}>
+                    <div className="modal-content modal-content-large" onClick={e => e.stopPropagation()}>
+                        <div style={{display:'flex', justifyContent:'space-between', borderBottom:'1px solid #ddd', paddingBottom:'10px', marginBottom: '15px'}}>
+                            <h3 style={{margin:0, color: '#1e293b'}}>NOAA GOES S3 Explorer</h3>
+                            <button onClick={onClose} style={{border:'none',background:'none',fontSize:'24px',cursor:'pointer',lineHeight:1}}>&times;</button>
+                        </div>
+                        
+                        <div style={{display: 'flex', gap: '15px', alignItems: 'flex-end', marginBottom: '20px', flexWrap: 'wrap'}}>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Satellite</label>
+                                <select value={satellite} onChange={e => setSatellite(e.target.value)} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px'}}>
+                                    <option value="noaa-goes19">GOES-19 (East)</option>
+                                    <option value="noaa-goes18">GOES-18 (West)</option>
+                                    <option value="noaa-goes17">GOES-17</option>
+                                    <option value="noaa-goes16">GOES-16</option>
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Date (UTC)</label>
+                                <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{padding: '5px', border: '1px solid #ccc', borderRadius: '4px'}} />
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Product</label>
+                                <select value={product} onChange={e => setProduct(e.target.value)} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px'}}>
+                                    {GOES_PRODUCTS.map(p => <option key={p.code} value={p.code}>{p.code} ({p.name})</option>)}
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Domain</label>
+                                <select disabled={!product.startsWith('ABI-L')} value={domain} onChange={e => { setDomain(e.target.value); setScanStatus(Array(24).fill('idle')); }} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px', opacity: product.startsWith('ABI-L') ? 1 : 0.5}}>
+                                    <option value="F">Full Disk (10 min)</option>
+                                    <option value="C">CONUS (5 min)</option>
+                                    <option value="M1">Meso 1 (1 min)</option>
+                                    <option value="M2">Meso 2 (1 min)</option>
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Click Action</label>
+                                <div style={{display: 'flex', border: '1px solid #ccc', borderRadius: '4px', overflow: 'hidden', fontSize: '11px'}}>
+                                    <label style={{backgroundColor: clickAction === 'load' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', borderRight: '1px solid #ccc', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="load" checked={clickAction === 'load'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Load in Viewer
+                                    </label>
+                                    <label style={{backgroundColor: clickAction === 'download' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', borderRight: '1px solid #ccc', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="download" checked={clickAction === 'download'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Download
+                                    </label>
+                                    <label style={{backgroundColor: clickAction === 'https' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', borderRight: '1px solid #ccc', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="https" checked={clickAction === 'https'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Copy HTTPS
+                                    </label>
+                                    <label style={{backgroundColor: clickAction === 's3' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="s3" checked={clickAction === 's3'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Copy S3 URI
+                                    </label>
+                                </div>
+                            </div>
+                            <button onClick={handleScan} style={{backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '7px 16px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', marginLeft: 'auto'}}>
+                                Scan S3 Bucket
+                            </button>
+                        </div>
+
+                        <div style={{fontSize: '12px', display: 'flex', gap: '15px', marginBottom: '10px', justifyContent: 'flex-end', fontWeight: 'bold', color: '#64748b'}}>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-idle"></div> Pending</div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-scanning"></div> Scanning</div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-exists"></div> Available (Click applies action)</div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-missing"></div> Missing</div>
+                        </div>
+
+                        <div className="dash-grid">
+                            {Array.from({length: 24}).map((_, h) => (
+                                <div key={h} className="dash-col">
+                                    <div className="dash-header">{String(h).padStart(2, '0')}z</div>
+                                    <div className="dash-slots">
+                                        {Array.from({length: slotsPerHour}).map((_, s) => {
+                                            const status = scanStatus[h];
+                                            const slotData = results[h] ? results[h][s] : null;
+                                            
+                                            let slotClass = 'slot-idle';
+                                            if (status === 'scanning') slotClass = 'slot-scanning';
+                                            else if (status === 'done' || status === 'error') {
+                                                slotClass = slotData ? 'slot-exists' : 'slot-missing';
+                                            }
+
+                                            return (
+                                                <div 
+                                                    key={s} 
+                                                    className={`dash-slot ${slotClass}`}
+                                                    title={slotData ? slotData.filename : `No data for slot ${s}`}
+                                                    onClick={() => handleSlotClick(slotData)}
+                                                ></div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                    </div>
                 </div>
             );
         }
@@ -575,7 +872,6 @@
                     chartInstance.current.destroy();
                 }
 
-                // Sample data to prevent browser freezing if the array is massive
                 const MAX_POINTS = 5000;
                 let data = Array.from(layer.values);
                 let labels = Array.from({length: data.length}, (_, i) => i);
@@ -648,7 +944,6 @@
             const dims = layer.dims;
             const n = dims.length;
 
-            // Calculate memory strides to support arbitrary axis mapping
             const strides = useMemo(() => {
                 const s = new Array(n);
                 let currentStride = 1;
@@ -674,7 +969,6 @@
             const height = dims[axisMap.y];
             const totalSlices = dims[axisMap.z];
 
-            // Three.js basic setup
             useEffect(() => {
                 if (!containerRef.current) return;
                 const container = containerRef.current;
@@ -686,7 +980,6 @@
                 const aspect = width / height;
 
                 const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
-                // Adjust camera Z based on aspect ratio to keep plane in view
                 camera.position.z = Math.max(1.5, 1.5 / aspect);
                 cameraRef.current = camera;
 
@@ -732,7 +1025,6 @@
                 };
             }, [width, height]);
 
-            // Update Texture based on slice slider and axis mapping
             useEffect(() => {
                 if (!meshRef.current || !layer.values) return;
                 
@@ -838,7 +1130,6 @@
             const [transform, setTransform] = useState({ x:0, y:0, scale:1 });
             const [domain, setDomain] = useState({ min:0, max:1 });
             
-            // Decoupled pan dragging refs to fix the frozen/broken pan
             const isPanning = useRef(false);
             const [cursorPanning, setCursorPanning] = useState(false);
             const lastPos = useRef({ x:0, y:0 });
@@ -942,14 +1233,10 @@
                 ctx.restore();
             }, [layer, transform, coastlineData, boundaryData, overlaySettings, spatialIndex]);
 
-            // Draw Decoupling: Store a ref to the latest draw method
             const drawRef = useRef(draw);
             useEffect(() => { drawRef.current = draw; }, [draw]);
-            
-            // Re-draw when dependencies (like transform) change
             useEffect(() => { draw(); }, [draw]);
 
-            // The ResizeObserver is now empty-deps, preventing the choking effect that broke panning
             useEffect(() => {
                 const viewDiv = viewRef.current;
                 if (!viewDiv) return;
@@ -1173,6 +1460,7 @@
             const [colorMap, setColorMap] = useState('grayscale');
             const [pixelInfo, setPixelInfo] = useState(null);
             const [metaView, setMetaView] = useState(null);
+            const [isDashboardOpen, setIsDashboardOpen] = useState(false);
             const [coastline, setCoastline] = useState(null);
             const [boundaries, setBoundaries] = useState(null);
             const [special, setSpecial] = useState({ lat:false, lon:false, map:false });
@@ -1191,7 +1479,7 @@
                     try {
                         const [worldRes, usRes] = await Promise.all([
                             fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'),
-                            fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json') // Added US States boundaries
+                            fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json')
                         ]);
                         const world = await worldRes.json();
                         const us = await usRes.json();
@@ -1264,12 +1552,11 @@
                     const root = f.get('/');
                     const vars = [];
                     
-                    // PDF Implementation: Extract full attributes dynamically
                     const scan = (g) => {
                         for (let k of g.keys()) {
                             const it = g.get(k);
                             if (it instanceof h5wasm.Group) scan(it);
-                            else if (it.shape && it.shape.length >= 1) { // CHANGED: Allowed 1D and N-D arrays
+                            else if (it.shape && it.shape.length >= 1) { 
                                 vars.push({ 
                                     name: k, 
                                     shape: it.shape, 
@@ -1335,7 +1622,7 @@
                         values: values, dims: v.shape, units: attrs.units || 'N/A',
                         attributes: attrs, coords: sourceMeta.coords,
                         tech: { dtype: v.dtype, shape: v.shape },
-                        domain: getDomain(values) // Cached domain to prevent unneeded heavy iteration loops
+                        domain: getDomain(values)
                     };
                     setLayers(prev => [...prev, layer]);
                     f.close(); h5wasm.FS.unlink(id);
@@ -1363,6 +1650,15 @@
                         <h3>Controls</h3>
                         <Uploader onNcFileLoaded={(buf, name) => handleUpload(buf, name)} onConfigLoaded={handleConfigLoaded} />
                         
+                        <div style={{marginBottom: '1rem'}}>
+                            <button 
+                                onClick={() => setIsDashboardOpen(true)} 
+                                style={{width: '100%', padding: '10px', backgroundColor: '#0284c7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'}}
+                            >
+                                🌐 Browse NOAA GOES AWS
+                            </button>
+                        </div>
+
                         <div style={{border:'1px solid #ccc', padding:'10px', borderRadius:'4px', marginTop:'1rem'}}>
                             <h4 style={{marginTop:0, marginBottom:'10px'}}>Data &amp; Layers</h4>
                             {Object.entries(sources).length === 0 ? <p>No data sources loaded.</p> : null}
@@ -1472,6 +1768,15 @@
                     )}
                     
                     <MetadataModal view={metaView} onClose={()=>setMetaView(null)} />
+
+                    <GoesDashboardModal 
+                        isOpen={isDashboardOpen} 
+                        onClose={() => setIsDashboardOpen(false)} 
+                        onSelectFile={(url, filename) => {
+                            setIsDashboardOpen(false);
+                            fetchFileUrl(url, filename);
+                        }} 
+                    />
                 </div>
             );
         }
