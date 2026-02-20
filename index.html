@@ -432,6 +432,7 @@
             const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
             const [product, setProduct] = useState('ABI-L2-CMIP');
             const [domain, setDomain] = useState('C');
+            const [channel, setChannel] = useState('02');
             const [clickAction, setClickAction] = useState('load'); // 'load', 'download', 'https', 's3'
             
             // Results is an array of 24 hours. Each hour is an array of slots.
@@ -440,6 +441,7 @@
 
             const domainConfig = { 'F': 6, 'C': 12, 'M1': 60, 'M2': 60 };
             const slotsPerHour = domainConfig[domain];
+            const needsChannel = ["ABI-L1b-Rad", "ABI-L2-CMIP", "ABI-L2-DMW", "ABI-L2-DMWV"].includes(product);
 
             const handleScan = async () => {
                 const emptyResults = Array(24).fill(null).map(() => Array(slotsPerHour).fill(null));
@@ -476,6 +478,9 @@
                         keys.forEach(key => {
                             const filename = key.split('/').pop();
                             
+                            // Channel filtering
+                            if (needsChannel && !filename.includes(`C${channel}_`)) return;
+
                             // Domain-specific filtering
                             if (domain.startsWith('M')) {
                                 if (!filename.includes(`${product}-${domain}-`)) return;
@@ -577,7 +582,7 @@
                             </div>
                             <div style={{display: 'flex', flexDirection: 'column'}}>
                                 <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Product</label>
-                                <select value={product} onChange={e => setProduct(e.target.value)} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px'}}>
+                                <select value={product} onChange={e => { setProduct(e.target.value); setScanStatus(Array(24).fill('idle')); }} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px'}}>
                                     {GOES_PRODUCTS.map(p => <option key={p.code} value={p.code}>{p.code} ({p.name})</option>)}
                                 </select>
                             </div>
@@ -591,6 +596,12 @@
                                 </select>
                             </div>
                             <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Channel</label>
+                                <select disabled={!needsChannel} value={channel} onChange={e => { setChannel(e.target.value); setScanStatus(Array(24).fill('idle')); }} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px', opacity: needsChannel ? 1 : 0.5}}>
+                                    {Array.from({length: 16}, (_, i) => String(i + 1).padStart(2, '0')).map(c => <option key={c} value={c}>Ch {c}</option>)}
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column', marginTop: '10px'}}>
                                 <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Click Action</label>
                                 <div style={{display: 'flex', border: '1px solid #ccc', borderRadius: '4px', overflow: 'hidden', fontSize: '11px'}}>
                                     <label style={{backgroundColor: clickAction === 'load' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', borderRight: '1px solid #ccc', display: 'flex', alignItems: 'center'}}>
@@ -607,7 +618,7 @@
                                     </label>
                                 </div>
                             </div>
-                            <button onClick={handleScan} style={{backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '7px 16px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', marginLeft: 'auto'}}>
+                            <button onClick={handleScan} style={{backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '7px 16px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', marginLeft: 'auto', alignSelf: 'flex-end'}}>
                                 Scan S3 Bucket
                             </button>
                         </div>
@@ -1774,7 +1785,7 @@
                         onClose={() => setIsDashboardOpen(false)} 
                         onSelectFile={(url, filename) => {
                             setIsDashboardOpen(false);
-                            fetchFileUrl(url, filename);
+                            window.location.href = `${window.location.pathname}?fileUrl=${encodeURIComponent(url)}`;
                         }} 
                     />
                 </div>
